@@ -1,0 +1,161 @@
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==========================================
+# Configuration Nexus
+# ==========================================
+
+REGISTRY="nexus-docker-pull.horsppicdatascience.nubo.dgfip"
+REPOSITORY="datascience/lumia/lumia-api"
+
+HELM_URL="http://nexus.horsppicdatascience.nubo.dgfip/repository/lumia"
+
+IMAGES=(
+    auth
+    catalog
+    chat
+    completion
+    model
+    utility
+)
+
+# ==========================================
+# Saisie des informations
+# ==========================================
+
+echo "======================================"
+echo "     LIVRAISON LUMIA API"
+echo "======================================"
+
+read -rp "Version de la release (ex: 0.1.1) : " RELEASE
+read -rp "Version du chart Helm (ex: 0.7.0) : " CHART_VERSION
+read -rp "Tag Docker : " TAG
+read -rp "Utilisateur Nexus : " USERNAME
+read -rsp "Mot de passe Nexus : " PASSWORD
+echo
+
+# ==========================================
+# Vérifications
+# ==========================================
+
+for VALUE in "$RELEASE" "$CHART_VERSION" "$TAG"; do
+    if [[ ! "$VALUE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "ERREUR : version ou tag invalide."
+        exit 1
+    fi
+done
+
+if [[ -z "$USERNAME" || -z "$PASSWORD" ]]; then
+    echo "ERREUR : identifiants Nexus manquants."
+    exit 1
+fi
+
+for CMD in docker curl tar gzip; do
+    if ! command -v "$CMD" >/dev/null 2>&1; then
+        echo "ERREUR : commande $CMD introuvable."
+        exit 1
+    fi
+done
+
+# ==========================================
+# Répertoire de livraison
+# ==========================================
+
+DIR="lumia-${RELEASE}"
+ARCHIVE="Lumia-api-livraison-${RELEASE}.tgz"
+
+if [[ -e "$DIR" || -e "$ARCHIVE" ]]; then
+    echo "ERREUR : $DIR ou $ARCHIVE existe déjà."
+    exit 1
+fi
+
+mkdir -p "$DIR"
+
+echo
+echo "Répertoire créé : $DIR"
+
+# ==========================================
+# Connexion au registre Docker Nexus
+# ==========================================
+
+echo
+echo "Connexion au registre Nexus..."
+
+printf '%s' "$PASSWORD" |
+    docker login "$REGISTRY" \
+        --username "$USERNAME" \
+        --password-stdin
+
+unset PASSWORD
+
+# ==========================================
+# Docker pull et Docker save
+# ==========================================
+
+for IMAGE in "${IMAGES[@]}"; do
+
+    FULL_IMAGE="${REGISTRY}/${REPOSITORY}/${IMAGE}:${TAG}"
+    OUTPUT_FILE="${DIR}/lumia-${IMAGE}.tgz"
+
+    echo
+    echo "--------------------------------------"
+    echo "Image : $IMAGE"
+    echo "--------------------------------------"
+
+    echo "Docker pull..."
+    docker pull "$FULL_IMAGE"
+
+    echo "Docker save..."
+    docker save "$FULL_IMAGE" | gzip > "$OUTPUT_FILE"
+
+    echo "Image sauvegardée : $OUTPUT_FILE"
+
+done
+
+# ==========================================
+# Téléchargement du chart Helm
+# ==========================================
+
+echo
+echo "Téléchargement du chart Helm..."
+
+CHART_FILE="lumia-api-${CHART_VERSION}.tgz"
+
+curl --fail --location --show-error \
+    "${HELM_URL}/${CHART_FILE}" \
+    --output "${DIR}/${CHART_FILE}"
+
+echo "Chart téléchargé : ${DIR}/${CHART_FILE}"
+
+# ==========================================
+# Création de l'archive finale
+# ==========================================
+
+echo
+echo "Création de l'archive finale..."
+
+tar -czf "$ARCHIVE" "$DIR"
+
+# ==========================================
+# Vérification
+# ==========================================
+
+echo
+echo "======================================"
+echo "     LIVRAISON TERMINÉE"
+echo "======================================"
+
+echo "Release      : $RELEASE"
+echo "Chart Helm   : $CHART_VERSION"
+echo "Tag Docker   : $TAG"
+echo "Répertoire   : $DIR"
+echo "Archive      : $ARCHIVE"
+
+echo
+echo "Contenu de l'archive :"
+tar -tzf "$ARCHIVE"
+
+echo
+echo "Taille de l'archive :"
+ls -lh "$ARCHIVE"
